@@ -1,0 +1,727 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Air Draw</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1f; --muted: #6b6b70;
+    --border: #e2e2e0; --accent: #ff4d6d; --off: #9a9aa0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141416; --panel: #1e1e21; --text: #f2f2f3; --muted: #a0a0a8;
+      --border: #333338; --off: #6a6a72;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141416; --panel: #1e1e21; --text: #f2f2f3; --muted: #a0a0a8;
+    --border: #333338; --off: #6a6a72;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  }
+  header { padding: 12px 16px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; }
+  .sub { color: var(--muted); font-size: 13px; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; padding: 0 16px 16px; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+
+  .stage {
+    position: relative; width: 100%; aspect-ratio: 4 / 3; background: #000;
+    border-radius: 12px; overflow: hidden;
+  }
+  /* video と canvas を同じ箱に重ね、箱ごと左右反転（鏡像表示） */
+  .mirror { position: absolute; inset: 0; transform: scaleX(-1); }
+  .mirror > * { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #video { opacity: .55; object-fit: fill; }
+  .stage.hide-video #video { opacity: 0; }
+  .stage.hide-video { background: #fff; }
+
+  /* 映像内パレット（反転しない層に置く） */
+  .palette {
+    position: absolute; top: 4%; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 1.2%; padding: 1% 1.6%; width: 84%;
+    background: rgba(20,20,24,.55); backdrop-filter: blur(6px);
+    border-radius: 14px; align-items: center; justify-content: space-between;
+  }
+  .palette[hidden] { display: none; }
+  .pi {
+    position: relative; flex: 1 1 0; aspect-ratio: 1; max-width: 64px; border-radius: 50%;
+    border: 3px solid rgba(255,255,255,.35); display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 700; font-size: clamp(10px, 1.6vw, 18px); user-select: none; overflow: hidden;
+    transition: transform .08s;
+  }
+  .pi.tool { border-radius: 12px; background: rgba(255,255,255,.12); }
+  .pi.sel { border-color: #fff; box-shadow: 0 0 0 3px rgba(255,255,255,.35); }
+  .pi.hover { transform: scale(1.15); border-color: #fff; }
+  .pi.flash { animation: flash .3s; }
+  @keyframes flash { from { background-color: #fff; } }
+  .pi .dwell { position: absolute; left: 0; bottom: 0; height: 4px; background: #fff; width: 0; }
+  .sep { width: 2px; align-self: stretch; background: rgba(255,255,255,.25); flex: 0 0 2px; }
+
+  .overlay-msg {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 12px; color: #fff; background: rgba(0,0,0,.6); text-align: center; padding: 16px;
+  }
+  .overlay-msg[hidden] { display: none; }
+
+  .badge {
+    position: absolute; left: 12px; bottom: 12px; padding: 6px 12px; border-radius: 999px;
+    font-weight: 700; color: #fff; background: var(--off);
+  }
+  .badge.pen { background: var(--accent); }
+  .badge.erase { background: #444; }
+  .badge.lost { background: #c77d00; }
+
+  aside { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+  details > summary { cursor: pointer; font-weight: 600; color: var(--muted); font-size: 13px; }
+  details[open] > summary { margin-bottom: 6px; }
+  aside h2 { font-size: 13px; margin: 0 0 4px; color: var(--muted); font-weight: 600; }
+  label { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 2px 0; }
+  input[type=range] { width: 120px; }
+  .val { display: inline-block; min-width: 3.2em; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  button {
+    font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+  select { font: inherit; padding: 4px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); max-width: 170px; }
+  .stats { font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); white-space: pre-wrap; }
+  .hint { font-size: 12px; color: var(--muted); margin: 0; }
+  .legend { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>✍️ Air Draw v2</h1>
+  <span class="sub">手を自然にしている間はカーソル移動だけ。決めた形にしたときだけ描きます。</span>
+</header>
+
+<main>
+  <div>
+    <div class="stage" id="stage">
+      <div class="mirror">
+        <video id="video" playsinline muted></video>
+        <canvas id="paint"></canvas>
+        <canvas id="debug"></canvas>
+      </div>
+      <div class="palette" id="palette" hidden></div>
+      <div class="badge" id="badge">待機中</div>
+      <div class="overlay-msg" id="startOverlay">
+        <div id="startMsg">カメラを使って手の形を認識します（映像はブラウザ内だけで処理され、外部には送信されません）</div>
+        <button class="primary" id="startBtn">カメラを開始</button>
+      </div>
+    </div>
+  </div>
+
+  <aside>
+    <div>
+      <h2>操作</h2>
+      <div class="legend" id="legend"></div>
+    </div>
+
+    <div>
+      <h2>描画の合図</h2>
+      <label>方式
+        <select id="mode">
+          <option value="pinch">🤏 ピンチで描く</option>
+          <option value="index">☝️ 人差し指で描く</option>
+          <option value="fist">✊ グーで描く（v1 方式）</option>
+        </select>
+      </label>
+      <label>✊ グーで消しゴム <input type="checkbox" id="fistErase" checked></label>
+      <label>パレットを滞在で選択 <input type="checkbox" id="dwell"></label>
+    </div>
+
+    <details open>
+      <summary>判定の調整</summary>
+      <label>ピンチ閾値 <span><input type="range" id="pinch" min="0.1" max="0.6" step="0.02" value="0.3"><span class="val" id="pinchV"></span></span></label>
+      <label>グー閾値 <span><input type="range" id="thresh" min="0.3" max="0.95" step="0.05" value="0.6"><span class="val" id="threshV"></span></span></label>
+      <label>開始までのフレーム <span><input type="range" id="onFrames" min="1" max="8" value="2"><span class="val" id="onFramesV"></span></span></label>
+      <label>終了までのフレーム <span><input type="range" id="offFrames" min="1" max="15" value="6"><span class="val" id="offFramesV"></span></span></label>
+      <label>見失い猶予 (ms) <span><input type="range" id="grace" min="0" max="1000" step="50" value="450"><span class="val" id="graceV"></span></span></label>
+      <label>平滑化 <span><input type="range" id="smooth" min="0" max="1" step="0.05" value="0.5"><span class="val" id="smoothV"></span></span></label>
+      <label>追跡の粘り <span><input type="range" id="trackConf" min="0.1" max="0.9" step="0.05" value="0.3"><span class="val" id="trackConfV"></span></span></label>
+      <p class="hint">「追跡の粘り」は値が小さいほど手を見失いにくくなります（代わりに誤検出は増えます）。</p>
+    </details>
+
+    <details>
+      <summary>カメラ</summary>
+      <label>解像度
+        <select id="res">
+          <option value="640x480" selected>640×480（軽い）</option>
+          <option value="1280x720">1280×720</option>
+        </select>
+      </label>
+      <label>フレームレート
+        <select id="fpsReq">
+          <option value="60" selected>60fps を要求</option>
+          <option value="30">30fps</option>
+        </select>
+      </label>
+      <label>手動露出 <input type="checkbox" id="manualExp" disabled></label>
+      <label>露出時間 <span><input type="range" id="expTime" disabled><span class="val" id="expTimeV"></span></span></label>
+      <p class="hint" id="camInfo">-</p>
+    </details>
+
+    <details>
+      <summary>表示</summary>
+      <label>骨格を表示 <input type="checkbox" id="showSkel" checked></label>
+      <label>カメラ映像を表示 <input type="checkbox" id="showVideo" checked></label>
+      <label>同時に認識する手 <select id="numHands"><option value="1" selected>1</option><option value="2">2</option></select></label>
+    </details>
+
+    <div class="row">
+      <button id="undoBtn">戻す (Z)</button>
+      <button id="clearBtn">全消去 (C)</button>
+      <button id="saveBtn">PNG保存 (S)</button>
+    </div>
+
+    <div>
+      <h2>診断 <button id="resetStats" style="padding:2px 8px;font-size:12px;margin-left:6px">リセット</button></h2>
+      <div class="stats" id="stats">-</div>
+    </div>
+  </aside>
+</main>
+
+<script type="module">
+import { FilesetResolver, GestureRecognizer, DrawingUtils }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/vision_bundle.mjs";
+
+const WASM_PATH = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
+const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task";
+
+const $ = (id) => document.getElementById(id);
+const video = $("video"), paint = $("paint"), debug = $("debug"), stage = $("stage");
+const pctx = paint.getContext("2d"), dctx = debug.getContext("2d");
+const base = document.createElement("canvas");  // 確定済みストロークを焼き込むキャンバス
+const bctx = base.getContext("2d");
+const drawingUtils = new DrawingUtils(dctx);
+
+// ---------- 設定値 ----------
+const num = (id) => Number($(id).value);
+function cfg() {
+  return {
+    mode: $("mode").value, fistErase: $("fistErase").checked && $("mode").value !== "fist",
+    dwell: $("dwell").checked, pinch: num("pinch"), thresh: num("thresh"),
+    onFrames: num("onFrames"), offFrames: num("offFrames"), grace: num("grace"), smooth: num("smooth"),
+  };
+}
+for (const id of ["pinch", "thresh", "onFrames", "offFrames", "grace", "smooth", "trackConf"]) {
+  const show = () => ($(id + "V").textContent = $(id).value);
+  $(id).addEventListener("input", show); show();
+}
+$("showVideo").onchange = (e) => stage.classList.toggle("hide-video", !e.target.checked);
+
+const LEGENDS = {
+  pinch: [["✋", "自然な手：カーソル移動だけ"], ["🤏", "ピンチ：描く／パレットを選ぶ"], ["✊", "グー：消しゴム"]],
+  index: [["✋ ✌️", "パー・2本指：カーソル移動だけ"], ["☝️", "人差し指だけ：描く／パレットを選ぶ"], ["✊", "グー：消しゴム"]],
+  fist: [["✋", "パー：カーソル移動だけ"], ["✊", "グー：描く／パレットを選ぶ"], ["🧽", "消しゴムはパレットから"]],
+};
+function updateLegend() {
+  const m = $("mode").value;
+  $("legend").innerHTML = LEGENDS[m].filter((r) => m === "fist" || r[0] !== "✊" || $("fistErase").checked)
+    .map(([a, b]) => `<span>${a}</span><span>${b}</span>`).join("");
+  $("fistErase").disabled = m === "fist";
+}
+$("mode").onchange = updateLegend; $("fistErase").onchange = updateLegend; updateLegend();
+
+// ---------- ツールとパレット ----------
+const tool = { kind: "pen", color: "#ff4d6d", width: 10 };
+const PALETTE = [
+  ...["#ff4d6d", "#ff9f1c", "#ffd60a", "#2ec4b6", "#3a86ff", "#8338ec", "#111111", "#ffffff"].map((c) => ({ act: "color", v: c })),
+  { sep: true },
+  { act: "eraser", label: "🧽" },
+  { sep: true },
+  { act: "size", v: 4, label: "S" }, { act: "size", v: 10, label: "M" }, { act: "size", v: 24, label: "L" },
+  { sep: true },
+  { act: "undo", label: "↶" }, { act: "clear", label: "🗑" },
+];
+const palEl = $("palette");
+const palItems = [];
+for (const it of PALETTE) {
+  if (it.sep) { const s = document.createElement("div"); s.className = "sep"; palEl.appendChild(s); continue; }
+  const el = document.createElement("div");
+  el.className = "pi" + (it.act === "color" ? "" : " tool");
+  if (it.act === "color") el.style.background = it.v;
+  el.innerHTML = (it.label || "") + '<div class="dwell"></div>';
+  el.title = it.act;
+  palEl.appendChild(el);
+  palItems.push({ ...it, el, bar: el.querySelector(".dwell") });
+}
+function refreshPalette() {
+  for (const p of palItems) {
+    const sel = (p.act === "color" && tool.kind === "pen" && tool.color === p.v) ||
+                (p.act === "eraser" && tool.kind === "eraser") ||
+                (p.act === "size" && tool.width === p.v);
+    p.el.classList.toggle("sel", sel);
+  }
+}
+function activate(p) {
+  if (p.act === "color") { tool.kind = "pen"; tool.color = p.v; }
+  if (p.act === "eraser") tool.kind = "eraser";
+  if (p.act === "size") tool.width = p.v;
+  if (p.act === "undo") undo();
+  if (p.act === "clear") clearAll();
+  p.el.classList.remove("flash"); void p.el.offsetWidth; p.el.classList.add("flash");
+  stats.paletteClicks++;
+  refreshPalette();
+}
+refreshPalette();
+palItems.forEach((p) => p.el.addEventListener("click", () => activate(p)));  // マウスでも押せる
+
+// キャンバス座標（鏡像前） -> ステージ上の表示座標
+let stageRect = null;
+function toDisplay(pt) {
+  return { x: (1 - pt.x / paint.width) * stageRect.width, y: (pt.y / paint.height) * stageRect.height };
+}
+function paletteHit(pt) {
+  if (palEl.hidden || !stageRect) return { inZone: false, item: null };
+  const d = toDisplay(pt);
+  const pr = palEl.getBoundingClientRect();
+  const zx = pr.left - stageRect.left, zy = pr.top - stageRect.top, m = 12;
+  const inZone = d.x > zx - m && d.x < zx + pr.width + m && d.y > zy - m && d.y < zy + pr.height + m;
+  if (!inZone) return { inZone, item: null };
+  let best = null, bestD = Infinity;
+  for (const p of palItems) {
+    const r = p.el.getBoundingClientRect();
+    const cx = r.left - stageRect.left + r.width / 2, cy = r.top - stageRect.top + r.height / 2;
+    const dd = Math.hypot(d.x - cx, d.y - cy);
+    if (dd < r.width * 0.75 && dd < bestD) { best = p; bestD = dd; }
+  }
+  return { inZone, item: best };
+}
+
+// ---------- ストローク ----------
+const strokes = [];   // 確定済み { color, width, erase, points }
+const live = new Set(); // 描画中のストローク
+
+function drawStroke(ctx, s) {
+  const p = s.points;
+  if (!p.length) return;
+  ctx.save();
+  ctx.globalCompositeOperation = s.erase ? "destination-out" : "source-over";
+  ctx.strokeStyle = ctx.fillStyle = s.erase ? "#000" : s.color;
+  ctx.lineWidth = s.width; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  if (p.length === 1) {
+    ctx.beginPath(); ctx.arc(p[0].x, p[0].y, s.width / 2, 0, Math.PI * 2); ctx.fill();
+  } else {
+    ctx.beginPath(); ctx.moveTo(p[0].x, p[0].y);
+    for (let i = 1; i < p.length - 1; i++) {
+      ctx.quadraticCurveTo(p[i].x, p[i].y, (p[i].x + p[i + 1].x) / 2, (p[i].y + p[i + 1].y) / 2);
+    }
+    ctx.lineTo(p[p.length - 1].x, p[p.length - 1].y);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+function rebuildBase() {
+  bctx.clearRect(0, 0, base.width, base.height);
+  for (const s of strokes) drawStroke(bctx, s);
+}
+function commit(s) {
+  live.delete(s);
+  if (s.points.length === 0) return;
+  strokes.push(s); drawStroke(bctx, s);
+}
+function render() {
+  pctx.clearRect(0, 0, paint.width, paint.height);
+  pctx.drawImage(base, 0, 0);
+  for (const s of live) drawStroke(pctx, s);
+}
+function undo() { strokes.pop(); rebuildBase(); }
+function clearAll() { strokes.length = 0; rebuildBase(); }
+
+$("undoBtn").onclick = undo;
+$("clearBtn").onclick = clearAll;
+$("saveBtn").onclick = savePNG;
+window.addEventListener("keydown", (e) => {
+  if (["INPUT", "SELECT"].includes(e.target.tagName)) return;
+  const k = e.key.toLowerCase();
+  if (k === "c") clearAll();
+  if (k === "s") savePNG();
+  if (k === "z") undo();
+});
+function savePNG() {
+  // 画面は鏡像表示なので、保存時も見た目どおりになるよう左右反転して書き出す
+  const out = document.createElement("canvas");
+  out.width = paint.width; out.height = paint.height;
+  const o = out.getContext("2d");
+  o.fillStyle = "#fff"; o.fillRect(0, 0, out.width, out.height);
+  o.translate(out.width, 0); o.scale(-1, 1);
+  o.drawImage(base, 0, 0);
+  const a = document.createElement("a");
+  a.download = `air-draw-${Date.now()}.png`;
+  a.href = out.toDataURL("image/png");
+  a.click();
+}
+
+// ---------- One Euro Filter（手ブレ除去） ----------
+class LowPass { constructor() { this.y = null; } f(x, a) { this.y = this.y === null ? x : a * x + (1 - a) * this.y; return this.y; } }
+class OneEuro {
+  constructor() { this.reset(); }
+  reset() { this.x = new LowPass(); this.dx = new LowPass(); this.t = null; }
+  alpha(cutoff, dt) { return 1 / (1 + 1 / (2 * Math.PI * cutoff) / dt); }
+  filter(v, t, minCutoff, beta) {
+    const dt = this.t === null ? 1 / 30 : Math.max(1e-3, (t - this.t) / 1000);
+    this.t = t;
+    const prev = this.x.y === null ? v : this.x.y;
+    const d = this.dx.f((v - prev) / dt, this.alpha(1.0, dt));
+    return this.x.f(v, this.alpha(minCutoff + beta * Math.abs(d), dt));
+  }
+}
+class PointFilter {
+  constructor() { this.fx = new OneEuro(); this.fy = new OneEuro(); }
+  reset() { this.fx.reset(); this.fy.reset(); }
+  filter(p, t, mc, b) { return { x: this.fx.filter(p.x, t, mc, b), y: this.fy.filter(p.y, t, mc, b) }; }
+}
+
+// ---------- 手の形の判定 ----------
+let W = 640, H = 480;
+const P = (lm, i) => ({ x: lm[i].x * W, y: lm[i].y * H });   // ピクセル座標（縦横比を正しく扱うため）
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const dW = (lm, i) => dist(P(lm, i), P(lm, 0));             // 手首からの距離
+const handScale = (lm) => dist(P(lm, 0), P(lm, 9)) || 1;     // 手首〜中指付け根を手の大きさの基準に
+const extended = (lm, tip, pip) => dW(lm, tip) > dW(lm, pip) * 1.08;
+const curled = (lm, tip, pip) => dW(lm, tip) < dW(lm, pip);
+const ruleFist = (lm) => [[8, 6], [12, 10], [16, 14], [20, 18]].every(([t, p]) => curled(lm, t, p));
+const pinchDist = (lm) => dist(P(lm, 4), P(lm, 8)) / handScale(lm);
+const indexOut = (lm) => dW(lm, 8) > dW(lm, 5) * 1.1;       // グーで指先が手のひらに入っていない
+const indexPointing = (lm) => extended(lm, 8, 6) && !extended(lm, 12, 10) && !extended(lm, 16, 14);
+const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+function palmCenter(lm) {
+  const ids = [0, 5, 9, 13, 17]; let x = 0, y = 0;
+  for (const i of ids) { const p = P(lm, i); x += p.x; y += p.y; }
+  return { x: x / ids.length, y: y / ids.length };
+}
+function cursorRaw(lm, mode) {
+  if (mode === "pinch") return mid(P(lm, 4), P(lm, 8));  // 親指と人差し指の中点：つまんでも位置がずれにくい
+  if (mode === "index") return P(lm, 8);
+  return palmCenter(lm);
+}
+
+// その瞬間に「やりたいこと」を判定： 'pen' | 'erase' | 'hover'
+function classify(lm, g, c, st) {
+  const fistScore = g?.categoryName === "Closed_Fist" ? g.score : 0;
+  const isFist = fistScore >= c.thresh || ruleFist(lm);
+  st.dbg = { g: g?.categoryName || "-", gs: g?.score ?? 0, pd: pinchDist(lm) };
+  if (c.mode === "fist") return isFist ? "pen" : "hover";
+  if (c.mode === "pinch") {
+    // ピンチにも閾値のヒステリシス：描画中は少し開いても途切れない
+    const thr = st.mode === "pen" ? c.pinch * 1.5 : c.pinch;
+    if (indexOut(lm) && st.dbg.pd < thr) return "pen";
+  } else if (indexPointing(lm)) return "pen";
+  if (c.fistErase && isFist) return "erase";
+  return "hover";
+}
+
+// ---------- 診断 ----------
+const stats = {};
+function resetStats() {
+  Object.assign(stats, { frames: 0, handFrames: 0, lostWhileDrawing: 0, bridged: 0, breaks: 0,
+    flickers: 0, paletteClicks: 0, inferMs: 0, fps: 0, _t: performance.now(), _n: 0 });
+}
+resetStats();
+$("resetStats").onclick = resetStats;
+window.__airdraw = { strokes, stats, tool };  // デバッグ用（コンソールから状態を確認できる）
+
+// ---------- 手ごとの状態 ----------
+const hands = new Map();
+function handState(key) {
+  if (!hands.has(key)) hands.set(key, {
+    curF: new PointFilter(), palmF: new PointFilter(),
+    mode: "hover", cand: null, candN: 0, stroke: null, anchor: "cur", consumed: false,
+    pending: [], last: null, v: { x: 0, y: 0 }, lastT: 0, lostAt: null, lastSeen: 0,
+    dwellItem: null, dwellStart: 0, dwellDone: false, cur: null, palm: null, dbg: {},
+  });
+  return hands.get(key);
+}
+
+// Hermite 曲線で、見失う前の速度を保ったまま途切れた区間をつなぐ
+function bridgeGap(s, p0, v0, p1, dt) {
+  const m0 = { x: v0.x * dt, y: v0.y * dt }, m1 = { x: p1.x - p0.x, y: p1.y - p0.y };
+  const n = Math.min(60, Math.max(2, Math.ceil(dist(p0, p1) / 4)));
+  for (let i = 1; i < n; i++) {
+    const t = i / n, t2 = t * t, t3 = t2 * t;
+    const h00 = 2 * t3 - 3 * t2 + 1, h10 = t3 - 2 * t2 + t, h01 = -2 * t3 + 3 * t2, h11 = t3 - t2;
+    s.points.push({ x: h00 * p0.x + h10 * m0.x + h01 * p1.x + h11 * m1.x, y: h00 * p0.y + h10 * m0.y + h01 * p1.y + h11 * m1.y });
+  }
+}
+
+function endStroke(st) {
+  if (st.stroke) commit(st.stroke);
+  st.stroke = null; st.pending = []; st.consumed = false;
+}
+function enterMode(st, mode, c) {
+  endStroke(st);
+  st.mode = mode; st.cand = null; st.candN = 0;
+  if (mode === "hover") return;
+  const hit = paletteHit(st.cur);
+  if (mode === "pen" && hit.inZone) {            // パレット上でのピンチ等は「クリック」
+    if (hit.item) activate(hit.item);
+    st.consumed = true; return;
+  }
+  const eraseStroke = mode === "erase" || tool.kind === "eraser";
+  st.anchor = mode === "erase" ? "palm" : "cur";
+  st.stroke = { color: tool.color, width: eraseStroke ? Math.max(36, tool.width * 3) : tool.width, erase: eraseStroke, points: [] };
+  live.add(st.stroke);
+}
+const anchorPt = (st) => (st.anchor === "palm" ? st.palm : st.cur);
+function addPoint(arr, p) {
+  const last = arr[arr.length - 1];
+  if (!last || dist(last, p) > 1.5) arr.push(p);
+}
+
+function processHand(key, lm, g, now, c) {
+  const st = handState(key);
+  const mc = 0.3 + (1 - c.smooth) * 4.7, beta = 0.02;
+  const wasLost = st.lostAt !== null;
+  if (wasLost) { st.curF.reset(); st.palmF.reset(); }
+  st.cur = st.curF.filter(cursorRaw(lm, c.mode), now, mc, beta);
+  st.palm = st.palmF.filter(palmCenter(lm), now, mc, beta);
+
+  // 見失いから復帰：猶予内なら同じストロークとしてつなぐ
+  if (wasLost) {
+    if (st.stroke && st.stroke.points.length) {
+      const p0 = st.stroke.points[st.stroke.points.length - 1], p1 = anchorPt(st);
+      if (dist(p0, p1) < Math.max(W, H) * 0.35) {
+        bridgeGap(st.stroke, p0, st.v, p1, now - st.lostAt);
+        stats.bridged++;
+      }
+    }
+    st.lostAt = null;
+  }
+
+  // 速度（見失ったときの予測と補間に使う）
+  const a = anchorPt(st);
+  if (st.last && now > st.lastT) {
+    const dt = now - st.lastT;
+    st.v = { x: 0.5 * st.v.x + 0.5 * (a.x - st.last.x) / dt, y: 0.5 * st.v.y + 0.5 * (a.y - st.last.y) / dt };
+  }
+  st.last = a; st.lastT = now; st.lastSeen = now;
+
+  // 状態遷移（ヒステリシス）：入るのは早く、抜けるのは慎重に
+  const want = classify(lm, g, c, st);
+  if (want === st.mode) {
+    if (st.pending.length && st.stroke) {      // 一瞬の誤判定だった → 保留していた点を戻す
+      for (const p of st.pending) addPoint(st.stroke.points, p);
+      stats.flickers++;
+    }
+    st.pending = []; st.cand = null; st.candN = 0;
+  } else {
+    if (st.cand === want) st.candN++; else { st.cand = want; st.candN = 1; }
+    const need = st.mode === "hover" ? c.onFrames : c.offFrames;
+    if (st.candN >= need) enterMode(st, want, c);
+  }
+
+  // 点を追加：判定が揺れている間は保留バッファへ
+  if (st.stroke) {
+    const p = anchorPt(st);
+    if (!paletteHit(p).inZone) {
+      if (want === st.mode) addPoint(st.stroke.points, p); else st.pending.push(p);
+    }
+  }
+
+  // パレットのホバーと滞在選択
+  const hit = st.mode === "hover" || st.consumed ? paletteHit(st.cur) : { item: null };
+  if (hit.item !== st.dwellItem) { st.dwellItem = hit.item; st.dwellStart = now; st.dwellDone = false; }
+  if (c.dwell && st.mode === "hover" && hit.item && !st.dwellDone && now - st.dwellStart > 700) {
+    activate(hit.item); st.dwellDone = true;
+  }
+
+  if ($("showSkel").checked) {
+    drawingUtils.drawConnectors(lm, GestureRecognizer.HAND_CONNECTIONS, { color: "rgba(255,255,255,0.7)", lineWidth: 2 });
+    drawingUtils.drawLandmarks(lm, { color: st.mode === "pen" ? "#ff4d6d" : "#3a86ff", lineWidth: 1, radius: 2 });
+  }
+  drawCursor(st, false);
+}
+
+function handleMissing(st, key, now, c) {
+  if (st.stroke) {
+    if (st.lostAt === null) { st.lostAt = now; stats.lostWhileDrawing++; }
+    if (now - st.lostAt > c.grace) {
+      endStroke(st); st.mode = "hover"; st.lostAt = null; stats.breaks++;
+      st.curF.reset(); st.palmF.reset(); st.last = null;
+    } else {
+      // 予測位置を点線で表示
+      const t = Math.min(now - st.lostAt, 300), p0 = anchorPt(st);
+      const pred = { x: p0.x + st.v.x * t, y: p0.y + st.v.y * t };
+      dctx.save(); dctx.setLineDash([6, 6]); dctx.lineWidth = 3; dctx.strokeStyle = "rgba(255,180,0,.9)";
+      dctx.beginPath(); dctx.moveTo(p0.x, p0.y); dctx.lineTo(pred.x, pred.y); dctx.stroke();
+      dctx.beginPath(); dctx.arc(pred.x, pred.y, 10, 0, Math.PI * 2); dctx.stroke(); dctx.restore();
+    }
+  } else if (now - st.lastSeen > 200) {
+    hands.delete(key);
+  }
+}
+
+function drawCursor(st) {
+  const p = st.mode === "erase" ? st.palm : st.cur;
+  dctx.save();
+  if (st.mode === "erase") {
+    dctx.setLineDash([5, 5]); dctx.lineWidth = 2; dctx.strokeStyle = "#fff";
+    dctx.beginPath(); dctx.arc(p.x, p.y, Math.max(36, tool.width * 3) / 2, 0, Math.PI * 2); dctx.stroke();
+  } else if (st.mode === "pen" && !st.consumed) {
+    dctx.fillStyle = tool.kind === "eraser" ? "#fff" : tool.color;
+    dctx.beginPath(); dctx.arc(p.x, p.y, Math.max(5, tool.width / 2 + 2), 0, Math.PI * 2); dctx.fill();
+    dctx.lineWidth = 2; dctx.strokeStyle = "#fff"; dctx.stroke();
+  } else {
+    dctx.lineWidth = 3; dctx.strokeStyle = "rgba(255,255,255,.95)";
+    dctx.beginPath(); dctx.arc(p.x, p.y, 12, 0, Math.PI * 2); dctx.stroke();
+    dctx.fillStyle = tool.kind === "eraser" ? "#fff" : tool.color;
+    dctx.beginPath(); dctx.arc(p.x, p.y, 4, 0, Math.PI * 2); dctx.fill();
+  }
+  dctx.restore();
+}
+
+// ---------- カメラ ----------
+let recognizer = null, track = null, lastVideoTime = -1, running = false;
+
+async function startCamera() {
+  if (track) track.stop();
+  const [w, h] = $("res").value.split("x").map(Number);
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: num("fpsReq") }, facingMode: "user" },
+    audio: false,
+  });
+  track = stream.getVideoTracks()[0];
+  video.srcObject = stream;
+  await video.play();
+  W = video.videoWidth; H = video.videoHeight;
+  for (const cv of [paint, debug, base]) { cv.width = W; cv.height = H; }
+  rebuildBase();
+  stage.style.aspectRatio = `${W} / ${H}`;
+  setupExposure();
+}
+
+function setupExposure() {
+  const caps = track.getCapabilities ? track.getCapabilities() : {};
+  const s = track.getSettings();
+  const ok = caps.exposureMode?.includes("manual") && caps.exposureTime;
+  $("manualExp").disabled = !ok; $("expTime").disabled = !ok || !$("manualExp").checked;
+  if (ok) {
+    Object.assign($("expTime"), { min: caps.exposureTime.min, max: caps.exposureTime.max, step: caps.exposureTime.step || 1 });
+    if (s.exposureTime) $("expTime").value = s.exposureTime;
+    $("expTimeV").textContent = $("expTime").value;
+  }
+  $("camInfo").textContent = `実際の設定: ${s.width}×${s.height} @ ${s.frameRate ? s.frameRate.toFixed(0) : "?"}fps` +
+    (ok ? "（手動露出に対応）" : "（このカメラ／ブラウザは手動露出に非対応）");
+}
+async function applyExposure() {
+  if (!track) return;
+  $("expTime").disabled = !$("manualExp").checked;
+  $("expTimeV").textContent = $("expTime").value;
+  try {
+    await track.applyConstraints({ advanced: [$("manualExp").checked
+      ? { exposureMode: "manual", exposureTime: num("expTime") }
+      : { exposureMode: "continuous" }] });
+  } catch (e) { console.warn("exposure", e); }
+}
+$("manualExp").onchange = applyExposure;
+$("expTime").oninput = applyExposure;
+$("res").onchange = $("fpsReq").onchange = () => running && startCamera().catch(console.error);
+
+function recognizerOptions() {
+  const tc = num("trackConf");
+  return { numHands: num("numHands"), minHandDetectionConfidence: 0.5, minHandPresenceConfidence: tc, minTrackingConfidence: tc };
+}
+$("trackConf").addEventListener("change", () => recognizer?.setOptions(recognizerOptions()));
+$("numHands").onchange = () => recognizer?.setOptions(recognizerOptions());
+
+$("startBtn").onclick = async () => {
+  const btn = $("startBtn"), msg = $("startMsg");
+  if (!navigator.mediaDevices?.getUserMedia) {
+    msg.textContent = "このページではカメラを使えません。https か http://localhost で開いてください（README 参照）。";
+    return;
+  }
+  btn.disabled = true;
+  try {
+    msg.textContent = "モデルを読み込み中…";
+    const fileset = await FilesetResolver.forVisionTasks(WASM_PATH);
+    const opts = (delegate) => ({ baseOptions: { modelAssetPath: MODEL_URL, delegate }, runningMode: "VIDEO", ...recognizerOptions() });
+    try { recognizer = await GestureRecognizer.createFromOptions(fileset, opts("GPU")); }
+    catch (e) { console.warn("GPU delegate failed, falling back to CPU", e); recognizer = await GestureRecognizer.createFromOptions(fileset, opts("CPU")); }
+    msg.textContent = "カメラを起動中…";
+    await startCamera();
+    $("startOverlay").hidden = true; palEl.hidden = false; running = true;
+    requestAnimationFrame(loop);
+  } catch (e) {
+    console.error(e);
+    msg.textContent = "起動に失敗しました: " + (e?.message || e) + "（カメラの許可を確認してください）";
+    btn.disabled = false;
+  }
+};
+
+// ---------- メインループ ----------
+function loop() {
+  requestAnimationFrame(loop);
+  if (video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  const now = performance.now();
+  const c = cfg();
+  stageRect = stage.getBoundingClientRect();
+
+  const t0 = performance.now();
+  const res = recognizer.recognizeForVideo(video, now);
+  stats.inferMs = stats.inferMs * 0.9 + (performance.now() - t0) * 0.1;
+  stats.frames++; stats._n++;
+  if (now - stats._t > 500) { stats.fps = (stats._n * 1000) / (now - stats._t); stats._n = 0; stats._t = now; }
+
+  dctx.clearRect(0, 0, W, H);
+  const seen = new Set();
+  const single = num("numHands") === 1;
+  (res.landmarks || []).forEach((lm, i) => {
+    const key = single ? "main" : (res.handedness?.[i]?.[0]?.categoryName || `h${i}`);
+    seen.add(key);
+    processHand(key, lm, res.gestures?.[i]?.[0], now, c);
+  });
+  if (seen.size) stats.handFrames++;
+  for (const [key, st] of hands) if (!seen.has(key)) handleMissing(st, key, now, c);
+
+  render();
+  updateHud(c);
+}
+
+function updateHud(c) {
+  // パレットのホバー表示と滞在ゲージ
+  const hovered = new Map();
+  for (const st of hands.values()) if (st.dwellItem && st.lostAt === null) hovered.set(st.dwellItem, st);
+  const now = performance.now();
+  for (const p of palItems) {
+    const st = hovered.get(p);
+    p.el.classList.toggle("hover", !!st);
+    p.bar.style.width = st && c.dwell && !st.dwellDone && st.mode === "hover" ? Math.min(100, (now - st.dwellStart) / 7) + "%" : "0";
+  }
+
+  const st = hands.values().next().value;
+  const badge = $("badge");
+  let cls = "", text = "手が見つかりません";
+  if (st) {
+    if (st.lostAt !== null) { cls = "lost"; text = "… 見失い（つなぎ待ち）"; }
+    else if (st.mode === "pen" && st.consumed) { cls = "pen"; text = "👆 選択"; }
+    else if (st.mode === "pen") { cls = "pen"; text = tool.kind === "eraser" ? "🧽 消しゴム" : "✍️ 描画中"; }
+    else if (st.mode === "erase") { cls = "erase"; text = "✊ 消しゴム"; }
+    else text = "✋ ホバー";
+  }
+  badge.className = "badge " + cls; badge.textContent = text;
+
+  const lostRate = stats.frames ? (100 * (1 - stats.handFrames / stats.frames)).toFixed(0) : 0;
+  const d = st?.dbg || {};
+  $("stats").textContent =
+    `処理 ${stats.fps.toFixed(0)} fps / 推論 ${stats.inferMs.toFixed(1)} ms\n` +
+    `手が映っていないフレーム ${lostRate}%\n` +
+    `描画中の見失い     ${stats.lostWhileDrawing}\n` +
+    `  └ つないで復帰    ${stats.bridged}\n` +
+    `  └ 猶予切れで切断  ${stats.breaks}\n` +
+    `形の誤判定を吸収   ${stats.flickers}\n` +
+    `パレット選択       ${stats.paletteClicks}\n` +
+    (st ? `\n認識: ${d.g} ${(d.gs ?? 0).toFixed(2)}\nピンチ距離: ${(d.pd ?? 0).toFixed(2)}（閾値 ${c.pinch}）` : "");
+}
+</script>
+</body>
+</html>

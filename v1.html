@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fist Draw</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1f; --muted: #6b6b70;
+    --border: #e2e2e0; --accent: #ff4d6d; --ok: #1f9d55; --off: #9a9aa0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141416; --panel: #1e1e21; --text: #f2f2f3; --muted: #a0a0a8;
+      --border: #333338; --off: #6a6a72;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141416; --panel: #1e1e21; --text: #f2f2f3; --muted: #a0a0a8;
+    --border: #333338; --off: #6a6a72;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  }
+  header { padding: 12px 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; }
+  .sub { color: var(--muted); font-size: 13px; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 16px; padding: 0 16px 16px; }
+  @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
+
+  .stage {
+    position: relative; width: 100%; aspect-ratio: 4 / 3; background: #000;
+    border-radius: 12px; overflow: hidden;
+  }
+  /* video と canvas を同じ箱に重ね、箱ごと左右反転（鏡像表示） */
+  .mirror { position: absolute; inset: 0; transform: scaleX(-1); }
+  .mirror > * { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  #video { opacity: .55; }
+  .stage.hide-video #video { opacity: 0; }
+  .stage.hide-video { background: #fff; }
+
+  .overlay-msg {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 12px; color: #fff; background: rgba(0,0,0,.6); text-align: center; padding: 16px;
+  }
+  .overlay-msg[hidden] { display: none; }
+
+  .badge {
+    position: absolute; top: 12px; left: 12px; padding: 6px 12px; border-radius: 999px;
+    font-weight: 700; color: #fff; background: var(--off); transition: background .1s;
+  }
+  .badge.on { background: var(--accent); }
+
+  aside { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+  aside h2 { font-size: 13px; margin: 0 0 4px; color: var(--muted); font-weight: 600; }
+  label { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  input[type=range] { width: 130px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  button {
+    font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+  .swatches { display: flex; gap: 6px; flex-wrap: wrap; }
+  .swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--border); padding: 0; }
+  .swatch.sel { border-color: var(--text); }
+  .stats { font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); white-space: pre-wrap; }
+  select { font: inherit; padding: 4px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  .hint { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>✊ Fist Draw</h1>
+  <span class="sub">グー（握りこぶし）の間だけ線が描かれます。パーにすると止まります。</span>
+</header>
+
+<main>
+  <div>
+    <div class="stage" id="stage">
+      <div class="mirror">
+        <video id="video" playsinline muted></video>
+        <canvas id="paint"></canvas>
+        <canvas id="debug"></canvas>
+      </div>
+      <div class="badge" id="badge">待機中</div>
+      <div class="overlay-msg" id="startOverlay">
+        <div id="startMsg">カメラを使って手の形を認識します（映像はブラウザ内だけで処理され、外部には送信されません）</div>
+        <button class="primary" id="startBtn">カメラを開始</button>
+      </div>
+    </div>
+  </div>
+
+  <aside>
+    <div>
+      <h2>ペン</h2>
+      <div class="swatches" id="swatches"></div>
+      <label style="margin-top:10px">太さ <input type="range" id="width" min="2" max="40" value="10"></label>
+    </div>
+
+    <div>
+      <h2>判定</h2>
+      <label>方式
+        <select id="mode">
+          <option value="model">モデル（Closed_Fist）</option>
+          <option value="rule">ルール（指の曲がり）</option>
+          <option value="either">どちらか</option>
+        </select>
+      </label>
+      <label>閾値 <span><input type="range" id="thresh" min="0.3" max="0.95" step="0.05" value="0.6"> <span id="threshVal">0.60</span></span></label>
+      <label>開始までのフレーム数 <input type="range" id="onFrames" min="1" max="8" value="3"></label>
+      <label>停止までのフレーム数 <input type="range" id="offFrames" min="1" max="12" value="5"></label>
+      <label>平滑化 <input type="range" id="smooth" min="0" max="1" step="0.05" value="0.5"></label>
+    </div>
+
+    <div>
+      <h2>表示</h2>
+      <label>骨格を表示 <input type="checkbox" id="showSkel" checked></label>
+      <label>カメラ映像を表示 <input type="checkbox" id="showVideo" checked></label>
+    </div>
+
+    <div class="row">
+      <button id="undoBtn">戻す (Z)</button>
+      <button id="clearBtn">全消去 (C)</button>
+      <button id="saveBtn">PNG保存 (S)</button>
+    </div>
+
+    <div>
+      <h2>状態</h2>
+      <div class="stats" id="stats">-</div>
+    </div>
+    <p class="hint">コツ：手のひらをカメラに向け、30〜80cmほど離すと安定します。描画位置は手のひらの中心です。</p>
+  </aside>
+</main>
+
+<script type="module">
+import { FilesetResolver, GestureRecognizer, DrawingUtils }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/vision_bundle.mjs";
+
+const WASM_PATH = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
+const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task";
+
+const $ = (id) => document.getElementById(id);
+const video = $("video"), paint = $("paint"), debug = $("debug");
+const pctx = paint.getContext("2d"), dctx = debug.getContext("2d");
+const drawingUtils = new DrawingUtils(dctx);
+
+// ---------- UI ----------
+const COLORS = ["#ff4d6d", "#ff9f1c", "#ffd60a", "#2ec4b6", "#3a86ff", "#8338ec", "#111111", "#ffffff"];
+let penColor = COLORS[0];
+const sw = $("swatches");
+COLORS.forEach((c, i) => {
+  const b = document.createElement("button");
+  b.className = "swatch" + (i === 0 ? " sel" : "");
+  b.style.background = c;
+  b.title = c;
+  b.onclick = () => {
+    penColor = c;
+    sw.querySelectorAll(".swatch").forEach((x) => x.classList.remove("sel"));
+    b.classList.add("sel");
+  };
+  sw.appendChild(b);
+});
+$("thresh").oninput = (e) => ($("threshVal").textContent = Number(e.target.value).toFixed(2));
+$("showVideo").onchange = (e) => $("stage").classList.toggle("hide-video", !e.target.checked);
+
+// ---------- 描画データ（ストローク単位で保持し、Undo と再描画に使う） ----------
+const strokes = [];          // { color, width, points: [{x,y}] }
+const active = new Map();    // 手ごとの描画中ストローク: key = "Left" / "Right"
+
+function redrawAll() {
+  pctx.clearRect(0, 0, paint.width, paint.height);
+  for (const s of strokes) drawStroke(s);
+}
+function drawStroke(s) {
+  const p = s.points;
+  if (p.length === 0) return;
+  pctx.strokeStyle = s.color; pctx.fillStyle = s.color;
+  pctx.lineWidth = s.width; pctx.lineCap = "round"; pctx.lineJoin = "round";
+  if (p.length === 1) {
+    pctx.beginPath(); pctx.arc(p[0].x, p[0].y, s.width / 2, 0, Math.PI * 2); pctx.fill(); return;
+  }
+  // 中点を使った二次ベジェで滑らかに
+  pctx.beginPath();
+  pctx.moveTo(p[0].x, p[0].y);
+  for (let i = 1; i < p.length - 1; i++) {
+    const mx = (p[i].x + p[i + 1].x) / 2, my = (p[i].y + p[i + 1].y) / 2;
+    pctx.quadraticCurveTo(p[i].x, p[i].y, mx, my);
+  }
+  const last = p[p.length - 1];
+  pctx.lineTo(last.x, last.y);
+  pctx.stroke();
+}
+
+$("clearBtn").onclick = () => { strokes.length = 0; active.clear(); redrawAll(); };
+$("undoBtn").onclick = () => {
+  const s = strokes.pop();
+  for (const [k, v] of active) if (v === s) active.delete(k);
+  redrawAll();
+};
+$("saveBtn").onclick = savePNG;
+window.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.key === "c" || e.key === "C") $("clearBtn").click();
+  if (e.key === "s" || e.key === "S") savePNG();
+  if (e.key === "z" || e.key === "Z") $("undoBtn").click();
+});
+
+function savePNG() {
+  // 画面は鏡像表示なので、保存時も見た目どおりになるよう左右反転して書き出す
+  const out = document.createElement("canvas");
+  out.width = paint.width; out.height = paint.height;
+  const o = out.getContext("2d");
+  o.fillStyle = "#ffffff"; o.fillRect(0, 0, out.width, out.height);
+  o.translate(out.width, 0); o.scale(-1, 1);
+  o.drawImage(paint, 0, 0);
+  const a = document.createElement("a");
+  a.download = `fist-draw-${Date.now()}.png`;
+  a.href = out.toDataURL("image/png");
+  a.click();
+}
+
+// ---------- One Euro Filter（手ブレ除去） ----------
+class LowPass { constructor() { this.y = null; } f(x, a) { this.y = this.y === null ? x : a * x + (1 - a) * this.y; return this.y; } }
+class OneEuro {
+  constructor() { this.x = new LowPass(); this.dx = new LowPass(); this.t = null; }
+  alpha(cutoff, dt) { const tau = 1 / (2 * Math.PI * cutoff); return 1 / (1 + tau / dt); }
+  filter(v, t, minCutoff, beta) {
+    const dt = this.t === null ? 1 / 30 : Math.max(1e-3, (t - this.t) / 1000);
+    this.t = t;
+    const prev = this.x.y === null ? v : this.x.y;
+    const d = this.dx.f((v - prev) / dt, this.alpha(1.0, dt));
+    const cutoff = minCutoff + beta * Math.abs(d);
+    return this.x.f(v, this.alpha(cutoff, dt));
+  }
+  reset() { this.x = new LowPass(); this.dx = new LowPass(); this.t = null; }
+}
+
+// ---------- 手ごとの状態 ----------
+const hands = new Map(); // key -> { fx, fy, onCount, offCount, drawing, lastSeen }
+function handState(key) {
+  if (!hands.has(key)) hands.set(key, { fx: new OneEuro(), fy: new OneEuro(), onCount: 0, offCount: 0, drawing: false, lastSeen: 0 });
+  return hands.get(key);
+}
+
+// ルール判定：人差し指〜小指の4本すべてで「指先が PIP 関節より手首に近い」= 曲がっている
+const FINGERS = [[8, 6], [12, 10], [16, 14], [20, 18]];
+function ruleFistScore(lm) {
+  const w = lm[0];
+  const d = (p) => Math.hypot(p.x - w.x, p.y - w.y, (p.z - w.z));
+  let curled = 0;
+  for (const [tip, pip] of FINGERS) if (d(lm[tip]) < d(lm[pip])) curled++;
+  return curled / 4;
+}
+
+// 描画位置：手のひらの中心（手首 + 各指の付け根の平均）。グーでも隠れない点を使う
+const PALM = [0, 5, 9, 13, 17];
+function palmCenter(lm) {
+  let x = 0, y = 0;
+  for (const i of PALM) { x += lm[i].x; y += lm[i].y; }
+  return { x: x / PALM.length, y: y / PALM.length };
+}
+
+// ---------- メイン ----------
+let recognizer = null;
+let lastVideoTime = -1;
+let fpsT = performance.now(), fpsN = 0, fps = 0;
+
+$("startBtn").onclick = start;
+
+async function start() {
+  const btn = $("startBtn"), msg = $("startMsg");
+  btn.disabled = true;
+  if (!navigator.mediaDevices?.getUserMedia) {
+    msg.textContent = "このページではカメラを使えません。https か http://localhost で開いてください（README 参照）。";
+    btn.disabled = false;
+    return;
+  }
+  try {
+    msg.textContent = "モデルを読み込み中…";
+    const fileset = await FilesetResolver.forVisionTasks(WASM_PATH);
+    const opts = (delegate) => ({
+      baseOptions: { modelAssetPath: MODEL_URL, delegate },
+      runningMode: "VIDEO",
+      numHands: 2,
+      minHandDetectionConfidence: 0.5,
+      minHandPresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+    try {
+      recognizer = await GestureRecognizer.createFromOptions(fileset, opts("GPU"));
+    } catch (e) {
+      console.warn("GPU delegate failed, falling back to CPU", e);
+      recognizer = await GestureRecognizer.createFromOptions(fileset, opts("CPU"));
+    }
+
+    msg.textContent = "カメラを起動中…";
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
+      audio: false,
+    });
+    video.srcObject = stream;
+    await video.play();
+
+    const w = video.videoWidth, h = video.videoHeight;
+    paint.width = debug.width = w;
+    paint.height = debug.height = h;
+    $("stage").style.aspectRatio = `${w} / ${h}`;
+    $("startOverlay").hidden = true;
+    requestAnimationFrame(loop);
+  } catch (e) {
+    console.error(e);
+    msg.textContent = "起動に失敗しました: " + (e && e.message ? e.message : e) +
+      "（カメラの許可、または https / localhost で開いているかを確認してください）";
+    btn.disabled = false;
+  }
+}
+
+function loop() {
+  requestAnimationFrame(loop);
+  if (video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  const now = performance.now();
+  const res = recognizer.recognizeForVideo(video, now);
+
+  fpsN++;
+  if (now - fpsT > 500) { fps = (fpsN * 1000) / (now - fpsT); fpsN = 0; fpsT = now; }
+
+  const W = paint.width, H = paint.height;
+  const mode = $("mode").value;
+  const thresh = Number($("thresh").value);
+  const onFrames = Number($("onFrames").value);
+  const offFrames = Number($("offFrames").value);
+  const smooth = Number($("smooth").value);
+  // smooth=0 でほぼ生の値、1 で強く平滑化
+  const minCutoff = 0.3 + (1 - smooth) * 4.7;
+  const beta = 0.02;
+
+  dctx.clearRect(0, 0, W, H);
+  const seen = new Set();
+  const lines = [];
+
+  (res.landmarks || []).forEach((lm, i) => {
+    const key = res.handedness?.[i]?.[0]?.categoryName || `hand${i}`;
+    seen.add(key);
+    const st = handState(key);
+    st.lastSeen = now;
+
+    const g = res.gestures?.[i]?.[0];
+    const modelScore = g && g.categoryName === "Closed_Fist" ? g.score : 0;
+    const ruleScore = ruleFistScore(lm);
+    let isFist;
+    if (mode === "model") isFist = modelScore >= thresh;
+    else if (mode === "rule") isFist = ruleScore >= 1;
+    else isFist = modelScore >= thresh || ruleScore >= 1;
+
+    // ヒステリシス：数フレーム連続で条件を満たしたら状態を切り替える
+    if (isFist) { st.onCount++; st.offCount = 0; } else { st.offCount++; st.onCount = 0; }
+    if (!st.drawing && st.onCount >= onFrames) {
+      st.drawing = true;
+      const s = { color: penColor, width: Number($("width").value), points: [] };
+      strokes.push(s); active.set(key, s);
+    } else if (st.drawing && st.offCount >= offFrames) {
+      st.drawing = false; active.delete(key);
+    }
+
+    const c = palmCenter(lm);
+    const x = st.fx.filter(c.x * W, now, minCutoff, beta);
+    const y = st.fy.filter(c.y * H, now, minCutoff, beta);
+
+    if (st.drawing && active.has(key)) {
+      const s = active.get(key);
+      const last = s.points[s.points.length - 1];
+      // 停止判定待ちの間（パーに変わりかけ）は線を伸ばさない
+      if (isFist && (!last || Math.hypot(x - last.x, y - last.y) > 1.5)) {
+        s.points.push({ x, y });
+      }
+    }
+
+    if ($("showSkel").checked) {
+      drawingUtils.drawConnectors(lm, GestureRecognizer.HAND_CONNECTIONS, { color: "rgba(255,255,255,0.8)", lineWidth: 3 });
+      drawingUtils.drawLandmarks(lm, { color: st.drawing ? "#ff4d6d" : "#3a86ff", lineWidth: 1, radius: 3 });
+    }
+    // カーソル
+    dctx.beginPath();
+    dctx.arc(x, y, Math.max(6, Number($("width").value) / 2 + 4), 0, Math.PI * 2);
+    dctx.lineWidth = 3;
+    dctx.strokeStyle = st.drawing ? penColor : "rgba(255,255,255,0.9)";
+    dctx.stroke();
+
+    lines.push(`${key.padEnd(5)} ${(g?.categoryName || "-").padEnd(12)} ${(g?.score ?? 0).toFixed(2)}  rule=${ruleScore.toFixed(2)}  ${st.drawing ? "● 描画中" : "○"}`);
+  });
+
+  // 見えなくなった手はストロークを閉じてフィルタをリセット
+  for (const [key, st] of hands) {
+    if (!seen.has(key) && now - st.lastSeen > 150) {
+      st.drawing = false; st.onCount = st.offCount = 0;
+      st.fx.reset(); st.fy.reset();
+      active.delete(key);
+    }
+  }
+
+  redrawAll();
+
+  const drawingAny = [...hands.values()].some((s) => s.drawing);
+  const badge = $("badge");
+  badge.classList.toggle("on", drawingAny);
+  badge.textContent = drawingAny ? "✊ 描画中" : (lines.length ? "✋ 停止中" : "手が見つかりません");
+  $("stats").textContent = `FPS ${fps.toFixed(0)}  strokes ${strokes.length}\n` + (lines.join("\n") || "(no hands)");
+}
+</script>
+</body>
+</html>
